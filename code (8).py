@@ -31,6 +31,7 @@ from datetime import datetime
 import json
 from collections import deque
 import cv2
+import os
 
 ROBOT_FACE = 1 # 0 1
 CURRENT_TARGET_YAW = 0.0
@@ -2497,6 +2498,9 @@ if __name__ == '__main__':
         # Start autonomous exploration with absolute directions
         explore_autonomously_with_absolute_directions(ep_gimbal, ep_chassis, ep_sensor, tof_handler, 
                            graph_mapper, movement_controller, attitude_handler, marker_handler, ep_robot, max_nodes=49)
+        
+        # Export maze data to JSON file
+        export_maze_data_to_json(graph_mapper, "maze_data.json")
             
     except KeyboardInterrupt:
         print("\n⚠️ Interrupted by user")
@@ -2515,3 +2519,264 @@ if __name__ == '__main__':
             pass
         ep_robot.close()
         print("🔌 Connection closed")
+
+
+def convert_to_json_serializable(obj):
+    """Convert numpy types and other non-serializable types to JSON-serializable types"""
+    import numpy as np
+    
+    if isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif isinstance(obj, (np.integer, int)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, float)):
+        return float(obj)
+    elif isinstance(obj, (np.ndarray, list, tuple)):
+        return [convert_to_json_serializable(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: convert_to_json_serializable(value) for key, value in obj.items()}
+    else:
+        return obj
+
+def print_node_detailed_info(node, node_id):
+    """Print detailed information about a node including exits and boundaries"""
+    print(f"\n🔍 === DETAILED NODE INFO: {node_id} ===")
+    print(f"   📍 Position: {node.position}")
+    print(f"   🧱 Walls: {node.walls}")
+    print(f"   ✅ Visited: {node.visited}")
+    print(f"   🔢 Visit Count: {node.visitCount}")
+    print(f"   ⚰️ Is Dead End: {node.isDeadEnd}")
+    print(f"   🔍 Fully Scanned: {getattr(node, 'fullyScanned', False)}")
+    print(f"   ⏰ Last Visited: {node.lastVisited}")
+    print(f"   🤝 Neighbors: {[(dir, neighbor.position if neighbor else None) for dir, neighbor in node.neighbors.items()]}")
+    print(f"   ❓ Unexplored Exits: {node.unexploredExits}")
+    print(f"   🧭 Explored Directions: {node.exploredDirections}")
+    print(f"   🚧 Out of Bounds Exits: {node.outOfBoundsExits}")
+    print(f"   📊 Out of Bounds Count: {node.outOfBoundsCount}")
+    
+    # Check for marker-related attributes
+    if hasattr(node, 'markersFound'):
+        print(f"   🎯 Markers Found: {node.markersFound}")
+    if hasattr(node, 'markerScanResults'):
+        print(f"   🔍 Marker Scan Results: {node.markerScanResults}")
+    if hasattr(node, 'hasMarkers'):
+        print(f"   📍 Has Markers: {node.hasMarkers}")
+
+def export_maze_data_to_json(graph_mapper, filename):
+    """
+    Export maze data (robot path and walls) to JSON file for visualization
+    """
+    try:
+        print(f"\n📤 === STARTING MAZE DATA EXPORT ===")
+        
+        # Get all positions and find boundaries
+        positions = [node.position for node in graph_mapper.nodes.values()]
+        if not positions:
+            print("❌ No maze data to export")
+            return
+        
+        min_x = min(pos[0] for pos in positions)
+        max_x = max(pos[0] for pos in positions)
+        min_y = min(pos[1] for pos in positions)
+        max_y = max(pos[1] for pos in positions)
+        
+        print(f"🗺️ Map boundaries: X[{min_x}, {max_x}], Y[{min_y}, {max_y}]")
+        print(f"📊 Total nodes to export: {len(graph_mapper.nodes)}")
+        
+        # Print detailed info for each node
+        for node_id, node in graph_mapper.nodes.items():
+            print_node_detailed_info(node, node_id)
+        
+        # Create maze data structure
+        maze_data = {
+            "metadata": {
+                "export_timestamp": datetime.now().isoformat(),
+                "total_nodes_explored": len(graph_mapper.nodes),
+                "boundaries": {
+                    "min_x": int(min_x),
+                    "max_x": int(max_x),
+                    "min_y": int(min_y),
+                    "max_y": int(max_y),
+                    "width": int(max_x - min_x + 1),
+                    "height": int(max_y - min_y + 1)
+                },
+                "robot_start_position": [0, 0],
+                "wall_threshold_cm": getattr(graph_mapper, 'WALL_THRESHOLD', 25)
+            },
+            "nodes": {},
+            "robot_path": [],
+            "walls": {},
+            "grid_representation": {},
+            "node_analysis": {},
+            "markers": {}  # Enhanced for marker data
+        }
+        
+        print(f"\n📋 === EXPORTING NODE DATA ===")
+        
+        # Export node data with proper type conversion
+        for node_id, node in graph_mapper.nodes.items():
+            print(f"🔄 Processing node: {node_id}")
+            
+            # Convert all data to JSON-serializable types
+            node_data = {
+                "position": list(node.position),
+                "walls": convert_to_json_serializable(node.walls),
+                "visited": convert_to_json_serializable(node.visited),
+                "visit_count": convert_to_json_serializable(node.visitCount),
+                "is_dead_end": convert_to_json_serializable(node.isDeadEnd),
+                "fully_scanned": convert_to_json_serializable(getattr(node, 'fullyScanned', False)),
+                "last_visited": str(node.lastVisited),
+                "neighbors": {},
+                "unexplored_exits": convert_to_json_serializable(node.unexploredExits),
+                "explored_directions": convert_to_json_serializable(node.exploredDirections),
+                "out_of_bounds_exits": convert_to_json_serializable(node.outOfBoundsExits),
+                "out_of_bounds_count": convert_to_json_serializable(node.outOfBoundsCount)
+            }
+            
+            # Add marker-related data if available
+            if hasattr(node, 'markersFound'):
+                node_data["markers_found"] = convert_to_json_serializable(node.markersFound)
+            if hasattr(node, 'markerScanResults'):
+                node_data["marker_scan_results"] = convert_to_json_serializable(node.markerScanResults)
+            if hasattr(node, 'hasMarkers'):
+                node_data["has_markers"] = convert_to_json_serializable(node.hasMarkers)
+            
+            # Handle neighbors carefully
+            for direction, neighbor in node.neighbors.items():
+                if neighbor:
+                    node_data["neighbors"][direction] = list(neighbor.position)
+                else:
+                    node_data["neighbors"][direction] = None
+            
+            maze_data["nodes"][node_id] = node_data
+            
+            # Add detailed analysis
+            maze_data["node_analysis"][node_id] = {
+                "total_possible_exits": 4,
+                "walls_count": sum(1 for wall in node.walls.values() if wall),
+                "available_exits": 4 - sum(1 for wall in node.walls.values() if wall),
+                "out_of_bounds_blocked": len(node.outOfBoundsExits),
+                "can_explore_count": len(node.unexploredExits),
+                "movement_efficiency": f"{node.visitCount} visits"
+            }
+            
+            # Add marker analysis if available
+            if hasattr(node, 'markersFound'):
+                maze_data["node_analysis"][node_id]["markers_found_count"] = len(node.markersFound)
+        
+        # Create robot path from visited nodes (chronological order)
+        print(f"\n🛤️ === CREATING ROBOT PATH ===")
+        visited_positions = [[0, 0]]  # Start position
+        
+        # Sort nodes by visit time if possible, otherwise by position
+        sorted_nodes = sorted(graph_mapper.nodes.values(), 
+                            key=lambda n: (n.lastVisited, n.position))
+        
+        for node in sorted_nodes:
+            if node.position != (0, 0):
+                visited_positions.append(list(node.position))
+        
+        maze_data["robot_path"] = visited_positions
+        print(f"   📍 Path length: {len(visited_positions)} positions")
+        
+        # Create wall data for easier plotting
+        print(f"\n🧱 === PROCESSING WALLS ===")
+        wall_count = 0
+        for node in graph_mapper.nodes.values():
+            x, y = node.position
+            for direction, has_wall in node.walls.items():
+                has_wall = convert_to_json_serializable(has_wall)
+                if has_wall:
+                    wall_key = f"{x},{y},{direction}"
+                    maze_data["walls"][wall_key] = {
+                        "position": [int(x), int(y)],
+                        "direction": str(direction),
+                        "wall_type": "detected"
+                    }
+                    wall_count += 1
+        
+        print(f"   🧱 Total walls processed: {wall_count}")
+        
+        # Create grid representation for easy plotting
+        print(f"\n🎯 === CREATING GRID REPRESENTATION ===")
+        for y in range(min_y, max_y + 1):
+            for x in range(min_x, max_x + 1):
+                node_id = f"{x},{y}"
+                if node_id in graph_mapper.nodes:
+                    node = graph_mapper.nodes[node_id]
+                    grid_data = {
+                        "explored": True,
+                        "walls": convert_to_json_serializable(node.walls),
+                        "visit_count": convert_to_json_serializable(node.visitCount),
+                        "is_dead_end": convert_to_json_serializable(node.isDeadEnd)
+                    }
+                    
+                    # Add marker data to grid if available
+                    if hasattr(node, 'hasMarkers'):
+                        grid_data["has_markers"] = convert_to_json_serializable(node.hasMarkers)
+                    
+                    maze_data["grid_representation"][f"{x},{y}"] = grid_data
+                else:
+                    maze_data["grid_representation"][f"{x},{y}"] = {
+                        "explored": False,
+                        "walls": {"north": True, "south": True, "east": True, "west": True},
+                        "visit_count": 0,
+                        "is_dead_end": False,
+                        "has_markers": False
+                    }
+        
+        # Compile marker data summary
+        print(f"\n🎯 === PROCESSING MARKER DATA ===")
+        total_markers_found = 0
+        marker_summary = {}
+        
+        for node_id, node in graph_mapper.nodes.items():
+            if hasattr(node, 'markersFound') and node.markersFound:
+                marker_summary[node_id] = {
+                    "position": list(node.position),
+                    "markers": convert_to_json_serializable(node.markersFound),
+                    "scan_results": convert_to_json_serializable(getattr(node, 'markerScanResults', {}))
+                }
+                total_markers_found += len(node.markersFound)
+        
+        maze_data["markers"] = {
+            "total_found": total_markers_found,
+            "nodes_with_markers": len(marker_summary),
+            "marker_details": marker_summary
+        }
+        
+        print(f"   🎯 Total markers found: {total_markers_found}")
+        print(f"   📍 Nodes with markers: {len(marker_summary)}")
+        
+        # Write to JSON file
+        print(f"\n💾 === WRITING TO JSON FILE ===")
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(maze_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"\n✅ === EXPORT COMPLETED SUCCESSFULLY ===")
+        print(f"📁 Maze data exported successfully to: {filename}")
+        print(f"   📊 Nodes exported: {len(maze_data['nodes'])}")
+        print(f"   🗺️ Grid size: {maze_data['metadata']['boundaries']['width']}x{maze_data['metadata']['boundaries']['height']}")
+        print(f"   🧱 Walls detected: {len(maze_data['walls'])}")
+        print(f"   🛤️ Path length: {len(maze_data['robot_path'])} positions")
+        print(f"   🎯 Markers found: {total_markers_found}")
+        
+        # Summary statistics
+        print(f"\n📈 === EXPORT STATISTICS ===")
+        total_out_of_bounds = sum(len(node.outOfBoundsExits) for node in graph_mapper.nodes.values())
+        total_unexplored = sum(len(node.unexploredExits) for node in graph_mapper.nodes.values())
+        total_walls = sum(sum(1 for wall in node.walls.values() if wall) for node in graph_mapper.nodes.values())
+        
+        print(f"   🚧 Total out-of-bounds exits blocked: {total_out_of_bounds}")
+        print(f"   ❓ Total unexplored exits remaining: {total_unexplored}")
+        print(f"   🧱 Total walls detected: {total_walls}")
+        print(f"   🎯 Total markers detected: {total_markers_found}")
+        print(f"   🏁 Export file size: {os.path.getsize(filename)} bytes")
+        
+    except Exception as e:
+        print(f"❌ Error exporting maze data: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+# 4. แก้ไขการตั้งค่า boundary ใน main
