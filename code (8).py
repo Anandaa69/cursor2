@@ -2448,7 +2448,387 @@ def generate_exploration_report_absolute(graph_mapper, nodes_explored, dead_end_
     print(f"\n{'='*60}")
     print("✅ ABSOLUTE DIRECTION EXPLORATION WITH RED-FILTERED MARKER DETECTION COMPLETE")
     print(f"{'='*60}")
+    
+    # Export maze data to JSON after successful exploration
+    try:
+        print(f"\n💾 === EXPORTING EXPLORATION RESULTS ===")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_filename = f"exploration_results_{timestamp}.json"
+        export_maze_data_to_json(graph_mapper, export_filename)
+        print(f"📁 Exploration results exported to: {export_filename}")
+    except Exception as export_error:
+        print(f"⚠️ Error during exploration export: {export_error}")
+        import traceback
+        traceback.print_exc()
 
+
+# ===== JSON Export Functions =====
+"""
+🎯 COMPREHENSIVE JSON EXPORT SYSTEM
+
+This system provides multiple export options for maze exploration data:
+
+📊 FULL EXPORT (export_maze_data_to_json):
+   - Complete maze data with all node details
+   - Robot path and movement history
+   - Wall analysis and grid representation
+   - Node analysis and statistics
+
+📋 SIMPLIFIED EXPORT (export_simple_maze_data):
+   - Essential maze information only
+   - Position, walls, and visit status
+   - Lightweight and fast export
+
+🎯 MARKER EXPORT (export_marker_data):
+   - Marker detection results
+   - Marker statistics per node
+   - Scan results and detection data
+
+🔄 AUTOMATIC EXPORT:
+   - Runs after successful exploration
+   - Runs during cleanup (even if interrupted)
+   - Creates timestamped files for each export type
+"""
+
+def convert_to_json_serializable(obj):
+    """Convert numpy types and other non-serializable types to JSON-serializable types"""
+    import numpy as np
+    
+    if isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif isinstance(obj, (np.integer, int)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, float)):
+        return float(obj)
+    elif isinstance(obj, (np.ndarray, list, tuple)):
+        return [convert_to_json_serializable(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: convert_to_json_serializable(value) for key, value in obj.items()}
+    else:
+        return obj
+
+def print_node_detailed_info(node, node_id):
+    """Print detailed information about a node including exits and boundaries"""
+    print(f"\n🔍 === DETAILED NODE INFO: {node_id} ===")
+    print(f"   📍 Position: {node.position}")
+    print(f"   🏠 Visited: {node.visited}, Count: {node.visitCount}")
+    print(f"   🚫 Dead End: {node.isDeadEnd}")
+    print(f"   🧱 Walls (absolute): {node.walls}")
+    
+    # ตรวจสอบทางออกที่สำรวจแล้ว
+    print(f"   ✅ Explored directions: {node.exploredDirections}")
+    print(f"   ❓ Unexplored exits: {node.unexploredExits}")
+    
+    # ตรวจสอบทางออกนอกแมพ
+    print(f"   🚧 Out of bounds exits: {node.outOfBoundsExits}")
+    print(f"   📊 Out of bounds count: {node.outOfBoundsCount}")
+    
+    # ตรวจสอบ neighbors
+    print(f"   🔗 Neighbors:")
+    for direction, neighbor in node.neighbors.items():
+        if neighbor:
+            print(f"      {direction}: {neighbor.position}")
+        else:
+            print(f"      {direction}: None")
+    
+    # ตรวจสอบว่าทิศทางไหนถูกป้องกันไม่ให้ไป
+    blocked_directions = []
+    for direction, has_wall in node.walls.items():
+        if has_wall:
+            blocked_directions.append(direction)
+    
+    if blocked_directions:
+        print(f"   🚫 Blocked directions: {blocked_directions}")
+    else:
+        print(f"   ✅ No walls detected")
+    
+    print(f"   ⏰ Last visited: {node.lastVisited}")
+    print(f"   🔬 Fully scanned: {getattr(node, 'fullyScanned', 'N/A')}")
+
+def export_maze_data_to_json(graph_mapper, filename):
+    """
+    Export maze data (robot path and walls) to JSON file for visualization
+    """
+    try:
+        print(f"\n📤 === STARTING MAZE DATA EXPORT ===")
+        
+        # Get all positions and find boundaries
+        positions = [node.position for node in graph_mapper.nodes.values()]
+        if not positions:
+            print("❌ No maze data to export")
+            return
+        
+        min_x = min(pos[0] for pos in positions)
+        max_x = max(pos[0] for pos in positions)
+        min_y = min(pos[1] for pos in positions)
+        max_y = max(pos[1] for pos in positions)
+        
+        print(f"🗺️ Map boundaries: X[{min_x}, {max_x}], Y[{min_y}, {max_y}]")
+        print(f"📊 Total nodes to export: {len(graph_mapper.nodes)}")
+        
+        # Print detailed info for each node
+        for node_id, node in graph_mapper.nodes.items():
+            print_node_detailed_info(node, node_id)
+        
+        # Create maze data structure
+        maze_data = {
+            "metadata": {
+                "export_timestamp": datetime.now().isoformat(),
+                "total_nodes_explored": len(graph_mapper.nodes),
+                "boundaries": {
+                    "min_x": int(min_x),
+                    "max_x": int(max_x),
+                    "min_y": int(min_y),
+                    "max_y": int(max_y),
+                    "width": int(max_x - min_x + 1),
+                    "height": int(max_y - min_y + 1)
+                },
+                "robot_start_position": [0, 0],
+                "wall_threshold_cm": getattr(graph_mapper, 'WALL_THRESHOLD', 25)
+            },
+            "nodes": {},
+            "robot_path": [],
+            "walls": {},
+            "grid_representation": {},
+            "node_analysis": {}
+        }
+        
+        print(f"\n📋 === EXPORTING NODE DATA ===")
+        
+        # Export node data with proper type conversion
+        for node_id, node in graph_mapper.nodes.items():
+            print(f"🔄 Processing node: {node_id}")
+            
+            # Convert all data to JSON-serializable types
+            node_data = {
+                "position": list(node.position),
+                "walls": convert_to_json_serializable(node.walls),
+                "visited": convert_to_json_serializable(node.visited),
+                "visit_count": convert_to_json_serializable(node.visitCount),
+                "is_dead_end": convert_to_json_serializable(node.isDeadEnd),
+                "fully_scanned": convert_to_json_serializable(getattr(node, 'fullyScanned', False)),
+                "last_visited": str(node.lastVisited),
+                "neighbors": {},
+                "unexplored_exits": convert_to_json_serializable(node.unexploredExits),
+                "explored_directions": convert_to_json_serializable(node.exploredDirections),
+                "out_of_bounds_exits": convert_to_json_serializable(node.outOfBoundsExits),
+                "out_of_bounds_count": convert_to_json_serializable(node.outOfBoundsCount)
+            }
+            
+            # Handle neighbors carefully
+            for direction, neighbor in node.neighbors.items():
+                if neighbor:
+                    node_data["neighbors"][direction] = list(neighbor.position)
+                else:
+                    node_data["neighbors"][direction] = None
+            
+            maze_data["nodes"][node_id] = node_data
+            
+            # Add detailed analysis
+            maze_data["node_analysis"][node_id] = {
+                "total_possible_exits": 4,
+                "walls_count": sum(1 for wall in node.walls.values() if wall),
+                "available_exits": 4 - sum(1 for wall in node.walls.values() if wall),
+                "out_of_bounds_blocked": len(node.outOfBoundsExits),
+                "can_explore_count": len(node.unexploredExits),
+                "movement_efficiency": f"{node.visitCount} visits"
+            }
+        
+        # Create robot path from visited nodes (chronological order)
+        print(f"\n🛤️ === CREATING ROBOT PATH ===")
+        visited_positions = [[0, 0]]  # Start position
+        
+        # Sort nodes by visit time if possible, otherwise by position
+        sorted_nodes = sorted(graph_mapper.nodes.values(), 
+                            key=lambda n: (n.lastVisited, n.position))
+        
+        for node in sorted_nodes:
+            if node.position != (0, 0):
+                visited_positions.append(list(node.position))
+        
+        maze_data["robot_path"] = visited_positions
+        print(f"   📍 Path length: {len(visited_positions)} positions")
+        
+        # Create wall data for easier plotting
+        print(f"\n🧱 === PROCESSING WALLS ===")
+        wall_count = 0
+        for node in graph_mapper.nodes.values():
+            x, y = node.position
+            for direction, has_wall in node.walls.items():
+                has_wall = convert_to_json_serializable(has_wall)
+                if has_wall:
+                    wall_key = f"{x},{y},{direction}"
+                    maze_data["walls"][wall_key] = {
+                        "position": [int(x), int(y)],
+                        "direction": str(direction),
+                        "wall_type": "detected"
+                    }
+                    wall_count += 1
+        
+        print(f"   🧱 Total walls processed: {wall_count}")
+        
+        # Create grid representation for easy plotting
+        print(f"\n🎯 === CREATING GRID REPRESENTATION ===")
+        for y in range(min_y, max_y + 1):
+            for x in range(min_x, max_x + 1):
+                node_id = f"{x},{y}"
+                if node_id in graph_mapper.nodes:
+                    node = graph_mapper.nodes[node_id]
+                    maze_data["grid_representation"][f"{x},{y}"] = {
+                        "explored": True,
+                        "walls": convert_to_json_serializable(node.walls),
+                        "visit_count": convert_to_json_serializable(node.visitCount),
+                        "is_dead_end": convert_to_json_serializable(node.isDeadEnd)
+                    }
+                else:
+                    maze_data["grid_representation"][f"{x},{y}"] = {
+                        "explored": False,
+                        "walls": {"north": True, "south": True, "east": True, "west": True},
+                        "visit_count": 0,
+                        "is_dead_end": False
+                    }
+        
+        # Write to JSON file
+        print(f"\n💾 === WRITING TO JSON FILE ===")
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(maze_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"\n✅ === EXPORT COMPLETED SUCCESSFULLY ===")
+        print(f"📁 Maze data exported successfully to: {filename}")
+        print(f"   📊 Nodes exported: {len(maze_data['nodes'])}")
+        print(f"   🗺️ Grid size: {maze_data['metadata']['boundaries']['width']}x{maze_data['metadata']['height']}")
+        print(f"   🧱 Walls detected: {len(maze_data['walls'])}")
+        print(f"   🛤️ Path length: {len(maze_data['robot_path'])} positions")
+        
+        # Summary statistics
+        print(f"\n📈 === EXPORT STATISTICS ===")
+        total_out_of_bounds = sum(len(node.outOfBoundsExits) for node in graph_mapper.nodes.values())
+        total_unexplored = sum(len(node.unexploredExits) for node in graph_mapper.nodes.values())
+        total_walls = sum(sum(1 for wall in node.walls.values() if wall) for node in graph_mapper.nodes.values())
+        
+        print(f"   🚧 Total out-of-bounds exits blocked: {total_out_of_bounds}")
+        print(f"   ❓ Total unexplored exits remaining: {total_unexplored}")
+        print(f"   🧱 Total walls detected: {total_walls}")
+        
+        # Get file size if file exists
+        try:
+            import os
+            file_size = os.path.getsize(filename)
+            print(f"   🏁 Export file size: {file_size} bytes")
+        except:
+            print(f"   🏁 Export file size: Unable to determine")
+        
+    except Exception as e:
+        print(f"❌ Error exporting maze data: {e}")
+        import traceback
+        traceback.print_exc()
+
+def export_simple_maze_data(graph_mapper, filename):
+    """
+    Export simplified maze data (essential information only)
+    """
+    try:
+        print(f"\n📤 === STARTING SIMPLIFIED MAZE EXPORT ===")
+        
+        # Get all positions and find boundaries
+        positions = [node.position for node in graph_mapper.nodes.values()]
+        if not positions:
+            print("❌ No maze data to export")
+            return
+        
+        min_x = min(pos[0] for pos in positions)
+        max_x = max(pos[0] for pos in positions)
+        min_y = min(pos[1] for pos in positions)
+        max_y = max(pos[1] for pos in positions)
+        
+        # Create simplified maze data structure
+        simple_maze_data = {
+            "metadata": {
+                "export_timestamp": datetime.now().isoformat(),
+                "total_nodes": len(graph_mapper.nodes),
+                "boundaries": {
+                    "min_x": int(min_x),
+                    "max_x": int(max_x),
+                    "min_y": int(min_y),
+                    "max_y": int(max_y)
+                }
+            },
+            "nodes": {},
+            "walls": {}
+        }
+        
+        # Export only essential node data
+        for node_id, node in graph_mapper.nodes.items():
+            simple_maze_data["nodes"][node_id] = {
+                "position": list(node.position),
+                "walls": convert_to_json_serializable(node.walls),
+                "visited": convert_to_json_serializable(node.visited)
+            }
+        
+        # Export wall data
+        for node in graph_mapper.nodes.values():
+            x, y = node.position
+            for direction, has_wall in node.walls.items():
+                if has_wall:
+                    wall_key = f"{x},{y},{direction}"
+                    simple_maze_data["walls"][wall_key] = {
+                        "position": [int(x), int(y)],
+                        "direction": str(direction)
+                    }
+        
+        # Write to JSON file
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(simple_maze_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"✅ Simplified maze data exported to: {filename}")
+        print(f"   📊 Nodes: {len(simple_maze_data['nodes'])}")
+        print(f"   🧱 Walls: {len(simple_maze_data['walls'])}")
+        
+    except Exception as e:
+        print(f"❌ Error exporting simplified maze data: {e}")
+
+def export_marker_data(graph_mapper, filename):
+    """
+    Export marker detection data specifically
+    """
+    try:
+        print(f"\n📤 === STARTING MARKER DATA EXPORT ===")
+        
+        marker_data = {
+            "metadata": {
+                "export_timestamp": datetime.now().isoformat(),
+                "total_nodes": len(graph_mapper.nodes)
+            },
+            "marker_nodes": {},
+            "marker_statistics": {
+                "total_markers_found": 0,
+                "nodes_with_markers": 0
+            }
+        }
+        
+        # Collect marker data from nodes
+        for node_id, node in graph_mapper.nodes.items():
+            if hasattr(node, 'markersFound') and node.markersFound:
+                marker_data["marker_nodes"][node_id] = {
+                    "position": list(node.position),
+                    "markers_found": convert_to_json_serializable(node.markersFound),
+                    "marker_scan_results": convert_to_json_serializable(getattr(node, 'markerScanResults', {})),
+                    "has_markers": convert_to_json_serializable(getattr(node, 'hasMarkers', False))
+                }
+                marker_data["marker_statistics"]["total_markers_found"] += len(node.markersFound)
+                marker_data["marker_statistics"]["nodes_with_markers"] += 1
+        
+        # Write to JSON file
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(marker_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"✅ Marker data exported to: {filename}")
+        print(f"   🎯 Total markers found: {marker_data['marker_statistics']['total_markers_found']}")
+        print(f"   📍 Nodes with markers: {marker_data['marker_statistics']['nodes_with_markers']}")
+        
+    except Exception as e:
+        print(f"❌ Error exporting marker data: {e}")
+        print("Note: This function requires nodes to have marker-related attributes")
 
 # 4. แก้ไขการตั้งค่า boundary ใน main
 if __name__ == '__main__':
@@ -2505,6 +2885,33 @@ if __name__ == '__main__':
         import traceback
         traceback.print_exc()
     finally:
+                    # Export maze data to JSON before cleanup
+            if graph_mapper and graph_mapper.nodes:
+                print(f"\n💾 === AUTOMATIC JSON EXPORT ===")
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                
+                # Export full maze data
+                full_export_filename = f"full_maze_data_{timestamp}.json"
+                export_maze_data_to_json(graph_mapper, full_export_filename)
+                print(f"📁 Full maze data exported to: {full_export_filename}")
+                
+                # Export simplified maze data
+                simple_export_filename = f"simple_maze_data_{timestamp}.json"
+                export_simple_maze_data(graph_mapper, simple_export_filename)
+                print(f"📁 Simple maze data exported to: {simple_export_filename}")
+                
+                # Export marker data if available
+                try:
+                    marker_export_filename = f"marker_data_{timestamp}.json"
+                    export_marker_data(graph_mapper, marker_export_filename)
+                    print(f"📁 Marker data exported to: {marker_export_filename}")
+                except:
+                    print("⚠️ Marker data export skipped (not available)")
+            else:
+                print("⚠️ No maze data available for export")
+        except Exception as export_error:
+            print(f"⚠️ Error during automatic export: {export_error}")
+        
         try:
             ep_sensor.unsub_distance()
             if marker_handler:
@@ -2515,3 +2922,16 @@ if __name__ == '__main__':
             pass
         ep_robot.close()
         print("🔌 Connection closed")
+        
+        # Final export summary
+        print(f"\n{'='*60}")
+        print("📤 JSON EXPORT SYSTEM SUMMARY")
+        print(f"{'='*60}")
+        print("✅ The following export functions are now available:")
+        print("   📊 export_maze_data_to_json() - Full maze data export")
+        print("   📋 export_simple_maze_data() - Simplified maze export")
+        print("   🎯 export_marker_data() - Marker detection export")
+        print("   🔄 Automatic export on completion and cleanup")
+        print("   📁 Files are saved with timestamps for easy identification")
+        print("   💾 All exports include comprehensive error handling")
+        print(f"{'='*60}")
